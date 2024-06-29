@@ -123,7 +123,7 @@ namespace Parquet.Meta.Proto {
             // if it's a stop, then we can return immediately, as the struct is over.
             if((CompactType)header == CompactType.Stop) {
                 fieldId = 0;
-                compactType = 0;
+                CompactType type = compactType = 0;
                 return false;
             }
 
