@@ -23,6 +23,8 @@ type ThriftState = {
     stream: Stream
     stack: int16 list
     }
+module ThriftState =
+    let create stream = { stream = stream; stack = [] }
 module Stream =
     let readInt32Async(stream: Stream) =
         async {
@@ -48,11 +50,11 @@ module Stream =
             return tmp
         }
 module ThriftCompact =
-    let private beginStruct (state: ThriftState) =
+    let enterStruct (state: ThriftState) =
         { state with
             stack = 0s :: state.stack
         }
-    let private endStruct (state: ThriftState) =
+    let exitStruct (state: ThriftState) =
         match state.stack with
         | _ :: rest -> { state with stack = rest }
         | _ -> InvalidOperationException("Malformed Thrift stream") |> raise
@@ -129,12 +131,23 @@ module ThriftCompact =
             int size, state
     let (|FieldId|) state =
         match state.stack with
-        | a :: rest -> a, state
+        | a :: _ -> a, state
         | _ -> 0s, state
+    let readNextField state =
+        let header = state.stream.ReadByte()
+        if enum header = CompactType.Stop then
+            None, state
+        else
+            let modifier = header &&& 0xf0 >>> 4 |> int16
+            let compactType = header &&& 0x0f
+            if modifier = 0s then
+                Some compactType, swapField state
+            else
+                Some compactType, fieldDelta modifier state
     let (|StructField|ExitStruct|) state =
         let header = state.stream.ReadByte()
         if enum header = CompactType.Stop then
-            ExitStruct
+            ExitStruct state
         else
             let modifier = header &&& 0xf0 >>> 4 |> int16
             let compactType = header &&& 0x0f
@@ -142,19 +155,6 @@ module ThriftCompact =
                 StructField (compactType, swapField state)
             else
                 StructField (compactType, fieldDelta modifier state)
-                
-            
-                    
-                    
-            
-                
-            
-                
-        
-        
-
-        
-          
 
 module File =
     let readThriftAsync (file: Stream) =
