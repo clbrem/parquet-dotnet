@@ -123,39 +123,62 @@ module ThriftCompact =
     
     let private readListHeader (state: ThriftState) =
         let sizeAndType = state.stream.ReadByte()
-        let size = sizeAndType >>> 4 &&& 0x0
+        let size = sizeAndType >>> 4 &&& 0x0f
+        let eltType = sizeAndType &&& 0x0f |> enum<CompactType>
         if size = 15 then
             let size, s = readVarInt32 state
-            int size, s
+            (int size, eltType) , s
         else
-            int size, state
+            (int size, eltType), state
+    let (|String|) state =
+        readString state
+    let (|I64|) state =
+        readI64 state
+    let (|I32|) state =
+        readI32 state
     let (|FieldId|) state =
         match state.stack with
-        | a :: _ -> a, state
-        | _ -> 0s, state
-    let readNextField state =
+        | a :: _ -> a
+        | _ -> 0s
+    let readNextField state: CompactType * ThriftState =
         let header = state.stream.ReadByte()
         if enum header = CompactType.Stop then
-            None, state
+            CompactType.Stop , state
         else
             let modifier = header &&& 0xf0 >>> 4 |> int16
             let compactType = header &&& 0x0f
             if modifier = 0s then
-                Some compactType, swapField state
+                enum compactType, swapField state
             else
-                Some compactType, fieldDelta modifier state
-    let (|StructField|ExitStruct|) state =
-        let header = state.stream.ReadByte()
-        if enum header = CompactType.Stop then
-            ExitStruct state
-        else
-            let modifier = header &&& 0xf0 >>> 4 |> int16
-            let compactType = header &&& 0x0f
-            if modifier = 0s then
-                StructField (compactType, swapField state)
-            else
-                StructField (compactType, fieldDelta modifier state)
+                enum compactType, fieldDelta modifier state
 
+    let rec skip (compactType: CompactType) (state: ThriftState)  =     
+        match compactType with
+        | CompactType.BooleanTrue
+        | CompactType.BooleanFalse ->
+            state 
+        | CompactType.Byte ->
+            state.stream.Seek(1, SeekOrigin.Current) |> ignore
+            state 
+        | CompactType.I16 -> 
+           readI16 state |> snd
+        | CompactType.I32 ->
+            readI32 state |> snd
+        | CompactType.I64 ->
+            readI64 state |> snd
+        | CompactType.Binary ->
+            readBinary state |> snd
+        | CompactType.Struct ->
+            let rec loop state =
+               match readNextField state with
+               | CompactType.Stop, _ -> state |> exitStruct
+               | _, state -> loop state             
+            loop (enterStruct state)               
+        | CompactType.List ->
+            let (ct, eltType), state = readListHeader state
+            [1..ct]
+            |> List.fold (fun state _ -> skip eltType state) state                                        
+        | compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
 module File =
     let readThriftAsync (file: Stream) =
         async {
