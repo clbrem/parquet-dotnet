@@ -4,6 +4,12 @@ open System.IO
 open Parquet
 open Xunit
 
+type Assert<'T>() =
+    inherit Xunit.Assert() with
+      static member FailWith f (a: 'T)=
+           Assert.Fail(sprintf f a) 
+      static member EqualTo (a:'T) (b:'T) =
+          Assert.Equal<'T>(a,b)
 
 type Mini = Stream * char list
 let (|Pop|_|) =
@@ -58,9 +64,48 @@ type FileMetaData = {
     numRows: int64
     createdBy: string
 } with
-   static member Default() = { version= 0; schema= []; numRows = 0L; createdBy = ""} 
+   static member Default() = { version= 0; schema= []; numRows = 0L; createdBy = ""}
 
 [<Fact>]
+let ``Can Write Thrift``() =
+    use stream = new MemoryStream()
+    let state =
+        ThriftState.create stream
+        |> ThriftCompact.enterStruct
+        |> ThriftCompact.writeListBegin (1s, CompactType.I32, 4)
+        |> ThriftCompact.writeI32 1
+        |> ThriftCompact.writeI32 2
+        |> ThriftCompact.writeI32 3
+        |> ThriftCompact.writeI32 4
+        |> ThriftCompact.exitStruct
+        |> ThriftCompact.writeStop
+    state.stream.Flush()
+    state.stream.Position <- 0L
+    
+    state
+    |> ThriftCompact.enterStruct
+    |> ThriftCompact.readNextField
+    |> function
+        | CompactType.Stop, _ -> failwith "No fields"
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.List((nItems, ct), newState) ->
+            [1..nItems]
+            |> List.fold (
+                function
+                | items, ThriftCompact.I32 (i, state) ->
+                    fun _ -> (i :: items), state                
+            ) ([], newState) 
+            |> fst
+            |> List.rev
+            |> Assert.EqualTo [1;2;3;4]
+        | _, _ -> failwith "no list"    
+    
+            
+            
+        
+        
+    
+
+//[<Fact>]
 let ``Can Read Thrift``() =
     let state = streamFromTestFile "thrift/wide.bin"
                 |> ThriftState.create

@@ -1,6 +1,7 @@
 namespace Parquet
 
 open System
+open System.Buffers
 open System.IO
 
 type CompactType =
@@ -50,6 +51,8 @@ module Stream =
             return tmp
         }
 module ThriftCompact =
+    let mutable private varInt = Array.create 10 0uy
+    let mutable private varIntCount = 0
     let enterStruct (state: ThriftState) =
         { state with
             stack = 0s :: state.stack
@@ -58,11 +61,39 @@ module ThriftCompact =
         match state.stack with
         | _ :: rest -> { state with stack = rest }
         | _ -> InvalidOperationException("Malformed Thrift stream") |> raise
-    
+                
+    let writeStop (state: ThriftState) =
+        do state.stream.WriteByte(byte CompactType.Stop)
+        state
+    let private int32ToVarInt (n: uint32) =
+        let rec loop i m =
+            if m &&& ~~~0x7fu = 0u then
+                varInt[i] <- byte m
+                varIntCount <- i + 1
+                varInt, varIntCount
+            else
+                varInt[i] <- (m &&& 0x7fu) ||| 0x80u |> byte
+                loop (i+1) (m >>> 7 )
+        loop 0 n
+    let private int64ToVarInt (n: uint64) =
+        let rec loop i m =
+            if m &&& ~~~0x7FUL = 0UL then
+                varInt[i] <- byte m
+                varIntCount <- i + 1
+                varInt
+            else
+                varInt[i] <- (m &&& 0x7FUL) ||| 0x80UL |> byte
+                loop (i+1) (m >>> 7 )
+        loop 0 n
+        
     let private zigZagToInt32 (n: uint) =
         int (n >>> 1) ^^^ (-(int n &&& 1))
     let private zigZagToInt64 (n: uint64) =
         int64 (n >>> 1) ^^^ (-(int64 n &&& 1))
+    let private int64ToZigZag (n: int64) =
+        uint64 (n <<< 1) ^^^ uint64 (n >>> 63)
+    let private int32ToZigZag (n: int32) =
+        uint (n <<< 1) ^^^ uint (n >>> 31)
     let private readVarInt32 (state: ThriftState) =
         let rec loop acc shift =            
             let b = state.stream.ReadByte() |> byte
@@ -71,7 +102,99 @@ module ThriftCompact =
                 acc
             else
                 loop acc (shift + 7)
-        loop 0u 0, state
+        loop 0u 0, state        
+    let private readI16 (state: ThriftState) =
+        let i, s = readVarInt32 state
+        zigZagToInt32 i |> int16, s        
+    let private writeI16( n: int16)  (state: ThriftState) =
+        let v, ct = int32ToVarInt (int32ToZigZag (int32 n))
+        state.stream.Write (v, 0, ct)
+        state    
+    let private pushField (fieldId: int16) state =
+        {state with stack = fieldId :: state.stack}
+    let private swapField state =
+        let a,newState = readI16 state
+        match newState.stack with
+        | _ :: rest -> {newState  with stack = a :: rest}
+        | _ -> {state with stack = [a]}
+    let private fieldDelta b state =
+        match state.stack with
+        | a :: rest -> {state with stack = (a+b) :: rest}
+        | _ -> {state with stack = [b]}
+            
+    let writeI32(n: int) (state: ThriftState) =
+        let v, ct = int32ToVarInt (int32ToZigZag (int32 n))
+        state.stream.Write (v, 0, ct)
+        state
+    let private writeI64(n: int64) (state: ThriftState)  =
+        let v = int64ToVarInt (int64ToZigZag n)
+        state.stream.Write (v, 0, varIntCount)
+        state
+    
+    let private getFieldId state =
+        match state.stack with
+        | a :: _ -> a
+        | _ -> 0s    
+    let (|FieldId|) state =
+        getFieldId state
+    let private (|Delta|_|) (fieldId: int16, lastFieldId: int16): byte option =
+        if fieldId > lastFieldId then
+            let d = fieldId - lastFieldId 
+            if d <= 15s then
+                Some (byte d <<< 4)
+            else
+                None
+        else
+            None
+        
+    let private writeFieldBegin ( fieldId: int16, ct: CompactType) (state: ThriftState) =
+        match (fieldId, getFieldId state) with
+        | Delta d ->            
+            let b = d ||| byte ct
+            state.stream.WriteByte b
+            state |> pushField fieldId
+        | _ ->
+            state.stream.WriteByte (byte ct)
+            writeI16 fieldId state 
+            |> pushField fieldId    
+    let writeI16Field (fieldId, n) =
+        writeFieldBegin (fieldId, CompactType.I16)
+        >> writeI16 n
+    let writeI32Field (fieldId, n) =
+        writeFieldBegin (fieldId, CompactType.I32)
+        >> writeI32 n
+    let writeI64Field (fieldId, n) =
+        writeFieldBegin (fieldId, CompactType.I64)
+        >> writeI64 n
+    let writeBinaryValue (value: byte[]) state=
+        let n = Array.length value
+        let newState = writeI32 n state
+        newState.stream.Write(value, 0, n)
+    let writeBinaryField (fieldId, value) =
+        writeFieldBegin(fieldId, CompactType.Binary)
+        >> writeBinaryValue value
+    
+    let writeStringValue (value: string) state=
+        let buf = ArrayPool<byte>.Shared.Rent(System.Text.Encoding.UTF8.GetByteCount(value) )
+        try 
+            let numBytes = System.Text.Encoding.UTF8.GetBytes(value, 0, value.Length, buf, 0)
+            let newState = writeI32 numBytes state
+            newState.stream.Write(buf, 0, numBytes)
+            newState
+        finally 
+            ArrayPool<byte>.Shared.Return(buf)
+    let writeStringField (fieldId, value) =
+        writeFieldBegin(fieldId, CompactType.Binary)
+        >> writeStringValue value
+    let writeListBegin (fieldId, elementType: CompactType, elementCount) state=
+        let newState = writeFieldBegin(fieldId, CompactType.List) state
+        if elementCount < 15 then
+            newState.stream.WriteByte(byte (elementCount <<< 4) ||| byte elementType)
+            newState
+        else
+            newState.stream.WriteByte(byte 0xf0 ||| byte elementType)
+            writeI32 elementCount newState
+            
     let private readVarInt64 (state: ThriftState) =
         let rec loop acc shift =            
             let b = state.stream.ReadByte() |> byte
@@ -84,18 +207,27 @@ module ThriftCompact =
     let private readByte (state: ThriftState) =
         state.stream.ReadByte() |> sbyte, state
     
-    let private readI16 (state: ThriftState) =
-        let i, s = readVarInt32 state
-        zigZagToInt32 i |> int16, s
-    let private swapField state =
-        let a,newState = readI16 state
-        match newState.stack with
-        | _ :: rest -> {newState  with stack = a :: rest}
-        | _ -> {state with stack = [a]}
-    let private fieldDelta b state =
-        match state.stack with
-        | a :: rest -> {state with stack = (a+b) :: rest}
-        | _ -> {state with stack = [b]}        
+    let private beginInlineStruct fieldId  =
+        writeFieldBegin(fieldId, CompactType.Struct) 
+    
+    let private writeBool (b: bool) (state: ThriftState) =
+        if b then
+            state.stream.WriteByte(byte CompactType.BooleanTrue)
+        else
+            state.stream.WriteByte(byte CompactType.BooleanFalse)
+        state
+    
+    let private writeBoolField (fieldId, b) =
+        if b then
+            writeFieldBegin(fieldId, CompactType.BooleanTrue) 
+        else
+            writeFieldBegin(fieldId, CompactType.BooleanFalse)
+
+    let private writeByteField (fieldId, b: sbyte) state =
+        let newState = writeFieldBegin(fieldId, CompactType.Byte) state
+        newState.stream.WriteByte(byte b)
+        newState
+            
     let private readI32 (state: ThriftState) =
         let i, s = (readVarInt32 state)
         zigZagToInt32 i, s
@@ -130,16 +262,15 @@ module ThriftCompact =
             (int size, eltType) , s
         else
             (int size, eltType), state
+    let (|List|) state =
+        readListHeader state
     let (|String|) state =
         readString state
     let (|I64|) state =
         readI64 state
     let (|I32|) state =
         readI32 state
-    let (|FieldId|) state =
-        match state.stack with
-        | a :: _ -> a
-        | _ -> 0s
+
     let readNextField state: CompactType * ThriftState =
         let header = state.stream.ReadByte()
         if enum header = CompactType.Stop then

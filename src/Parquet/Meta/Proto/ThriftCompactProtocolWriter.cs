@@ -202,6 +202,7 @@ namespace Parquet.Meta.Proto {
 
                 Int32ToVarInt((uint)elementCount, ref PreAllocatedVarInt);
                 _outputStream.Write(PreAllocatedVarInt.bytes, 0, PreAllocatedVarInt.count);
+                
             }
         }
 
