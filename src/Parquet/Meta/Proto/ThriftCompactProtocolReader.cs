@@ -188,7 +188,8 @@ namespace Parquet.Meta.Proto {
                 //    break;
                 case CompactType.Struct:
                     StructBegin();
-                    while(ReadNextField(out _, out _)) {
+                    while(ReadNextField(out short fieldId, out CompactType ct)) {
+                        Console.WriteLine($"fieldId: {fieldId}; ct: {ct}");
 
                     }
                     StructEnd();

@@ -7,7 +7,9 @@
         <GenerateProgramFile>false</GenerateProgramFile>
         <IsTestProject>true</IsTestProject>
     </PropertyGroup>
-
+    <ItemGroup>
+        <ProjectReference Include="..\Parquet\Parquet.csproj" />
+    </ItemGroup>
     <ItemGroup>
         <Compile Include="Parquet.fs" />
         <Compile Include="Tests.fs"/>
@@ -416,5 +418,7 @@
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
     </ItemGroup>
+
+
 
 </Project>

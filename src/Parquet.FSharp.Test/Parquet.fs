@@ -62,7 +62,7 @@ module ThriftCompact =
         | _ :: rest -> { state with stack = rest }
         | _ -> InvalidOperationException("Malformed Thrift stream") |> raise
                 
-    let writeStop (state: ThriftState) =
+    let writeStopStruct (state: ThriftState) =
         do state.stream.WriteByte(byte CompactType.Stop)
         state
     let private int32ToVarInt (n: uint32) =
@@ -75,7 +75,7 @@ module ThriftCompact =
                 varInt[i] <- (m &&& 0x7fu) ||| 0x80u |> byte
                 loop (i+1) (m >>> 7 )
         loop 0 n
-    let private int64ToVarInt (n: uint64) =
+    let private int64ToVarInt (n: uint64) =        
         let rec loop i m =
             if m &&& ~~~0x7FUL = 0UL then
                 varInt[i] <- byte m
@@ -87,9 +87,9 @@ module ThriftCompact =
         loop 0 n
         
     let private zigZagToInt32 (n: uint) =
-        int (n >>> 1) ^^^ (-(int n &&& 1))
+        int (n >>> 1) ^^^ (-(int (n &&& 1u)))
     let private zigZagToInt64 (n: uint64) =
-        int64 (n >>> 1) ^^^ (-(int64 n &&& 1))
+        int64 (n >>> 1) ^^^ (-(int64 (n &&& 1UL)))
     let private int64ToZigZag (n: int64) =
         uint64 (n <<< 1) ^^^ uint64 (n >>> 63)
     let private int32ToZigZag (n: int32) =
@@ -111,7 +111,9 @@ module ThriftCompact =
         state.stream.Write (v, 0, ct)
         state    
     let private pushField (fieldId: int16) state =
-        {state with stack = fieldId :: state.stack}
+        match state.stack with
+        | _ :: rest -> {state with stack = fieldId :: rest}
+        | _ -> {state with stack = [fieldId]}
     let private swapField state =
         let a,newState = readI16 state
         match newState.stack with
@@ -207,7 +209,7 @@ module ThriftCompact =
     let private readByte (state: ThriftState) =
         state.stream.ReadByte() |> sbyte, state
     
-    let private beginInlineStruct fieldId  =
+    let writeStartStruct fieldId  =
         writeFieldBegin(fieldId, CompactType.Struct) 
     
     let private writeBool (b: bool) (state: ThriftState) =
@@ -282,33 +284,34 @@ module ThriftCompact =
                 enum compactType, swapField state
             else
                 enum compactType, fieldDelta modifier state
-
-    let rec skip (compactType: CompactType) (state: ThriftState)  =     
-        match compactType with
-        | CompactType.BooleanTrue
-        | CompactType.BooleanFalse ->
+    type ThriftCollection = |List of CompactType | Struct 
+    let rec skip (coll: ThriftCollection list) (compactType: CompactType) (state: ThriftState)  =     
+        match coll, compactType with
+        | [], CompactType.BooleanTrue
+        | [], CompactType.BooleanFalse ->
             state 
-        | CompactType.Byte ->
+        | [], CompactType.Byte ->
             state.stream.Seek(1, SeekOrigin.Current) |> ignore
             state 
-        | CompactType.I16 -> 
+        | [], CompactType.I16 -> 
            readI16 state |> snd
-        | CompactType.I32 ->
+        | [], CompactType.I32 ->
             readI32 state |> snd
-        | CompactType.I64 ->
+        | [], CompactType.I64 ->
             readI64 state |> snd
-        | CompactType.Binary ->
+        | [], CompactType.Binary ->
             readBinary state |> snd
-        | CompactType.Struct ->
-            let rec loop state =
-               match readNextField state with
-               | CompactType.Stop, _ -> state |> exitStruct
-               | _, state -> loop state             
-            loop (enterStruct state)               
-        | CompactType.List ->
+        | [], CompactType.Struct ->            
+           match readNextField state with
+           | CompactType.Stop, _ -> state |> exitStruct  
+           | ct, state -> skip ct state           
+        |[], CompactType.List ->
             let (ct, eltType), state = readListHeader state
             [1..ct]
-            |> List.fold (fun state _ -> skip eltType state) state                                        
+            |> List.fold (
+                fun state _ ->
+                    skip eltType state
+                ) state                                        
         | compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
 module File =
     let readThriftAsync (file: Stream) =

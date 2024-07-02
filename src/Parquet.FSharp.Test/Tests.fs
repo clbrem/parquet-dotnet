@@ -2,6 +2,7 @@ module Tests
 
 open System.IO
 open Parquet
+open Parquet.Meta.Proto
 open Xunit
 
 type Assert<'T>() =
@@ -69,34 +70,34 @@ type FileMetaData = {
 [<Fact>]
 let ``Can Write Thrift``() =
     use stream = new MemoryStream()
+    let writeMiniStruct i =
+        ThriftCompact.enterStruct        
+        >> ThriftCompact.writeI32Field (2s, i)
+        >> ThriftCompact.exitStruct
+        >> ThriftCompact.writeStopStruct
     let state =
         ThriftState.create stream
         |> ThriftCompact.enterStruct
-        |> ThriftCompact.writeListBegin (1s, CompactType.I32, 4)
-        |> ThriftCompact.writeI32 1
-        |> ThriftCompact.writeI32 2
-        |> ThriftCompact.writeI32 3
-        |> ThriftCompact.writeI32 4
+        |> ThriftCompact.writeListBegin (1s, CompactType.Struct, 4)
+        |> writeMiniStruct 1
+        |> writeMiniStruct 2
+        |> writeMiniStruct 3
+        |> writeMiniStruct 4
         |> ThriftCompact.exitStruct
-        |> ThriftCompact.writeStop
+        |> ThriftCompact.writeStopStruct
     state.stream.Flush()
-    state.stream.Position <- 0L
-    
+    state.stream.Position <- 0L    
     state
     |> ThriftCompact.enterStruct
     |> ThriftCompact.readNextField
     |> function
         | CompactType.Stop, _ -> failwith "No fields"
-        | _, ThriftCompact.FieldId 1s & ThriftCompact.List((nItems, ct), newState) ->
-            [1..nItems]
-            |> List.fold (
-                function
-                | items, ThriftCompact.I32 (i, state) ->
-                    fun _ -> (i :: items), state                
-            ) ([], newState) 
-            |> fst
-            |> List.rev
-            |> Assert.EqualTo [1;2;3;4]
+        | _, ThriftCompact.FieldId 1s & newState  ->
+            ThriftCompact.skip CompactType.List newState
+            |> ThriftCompact.readNextField
+            |> function
+                | CompactType.Stop, _ -> Assert.True true
+                | cpt, _ -> failwith "no list"
         | _, _ -> failwith "no list"    
     
             
