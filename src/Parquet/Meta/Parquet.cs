@@ -108,7 +108,7 @@ namespace Parquet.Meta {
 
         /// <summary>
         /// An embedded JSON document  A JSON document embedded within a single UTF8 column.
-        /// </summary>
+        /// </suommary>
         JSON = 19,
 
         /// <summary>
@@ -991,7 +991,7 @@ namespace Parquet.Meta {
         /// </summary>
         public int? TypeLength { get; set; }
 
-        /// <summary>
+        /// <summary>o
         /// Repetition of the field. The root of the schema does not have a repetition_type. All other nodes must have one.
         /// </summary>
         public FieldRepetitionType? RepetitionType { get; set; }

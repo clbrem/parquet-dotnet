@@ -1,5 +1,4 @@
 namespace Parquet
-
 open System
 open System.Buffers
 open System.IO
@@ -60,7 +59,7 @@ module ThriftCompact =
     let exitStruct (state: ThriftState) =
         match state.stack with
         | _ :: rest -> { state with stack = rest }
-        | _ -> InvalidOperationException("Malformed Thrift stream") |> raise
+        | _ -> {state with stack = []}
                 
     let writeStopStruct (state: ThriftState) =
         do state.stream.WriteByte(byte CompactType.Stop)
@@ -284,35 +283,41 @@ module ThriftCompact =
                 enum compactType, swapField state
             else
                 enum compactType, fieldDelta modifier state
-    type ThriftCollection = |List of CompactType | Struct 
-    let rec skip (coll: ThriftCollection list) (compactType: CompactType) (state: ThriftState)  =     
-        match coll, compactType with
-        | [], CompactType.BooleanTrue
-        | [], CompactType.BooleanFalse ->
-            state 
-        | [], CompactType.Byte ->
-            state.stream.Seek(1, SeekOrigin.Current) |> ignore
-            state 
-        | [], CompactType.I16 -> 
-           readI16 state |> snd
-        | [], CompactType.I32 ->
-            readI32 state |> snd
-        | [], CompactType.I64 ->
-            readI64 state |> snd
-        | [], CompactType.Binary ->
-            readBinary state |> snd
-        | [], CompactType.Struct ->            
-           match readNextField state with
-           | CompactType.Stop, _ -> state |> exitStruct  
-           | ct, state -> skip ct state           
-        |[], CompactType.List ->
-            let (ct, eltType), state = readListHeader state
-            [1..ct]
-            |> List.fold (
-                fun state _ ->
-                    skip eltType state
-                ) state                                        
-        | compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
+    type ThriftCollection = | ThriftList of int * CompactType | ThriftStruct
+    
+    let skip (ct: CompactType) (st: ThriftState)  =
+        let rec loop compactType (coll: ThriftCollection list) state =
+            match coll, compactType with
+            | [], None -> state
+            | ThriftList (0, ct) :: rest, None ->
+                loop None rest state
+            | ThriftList (i, ct) :: rest, None ->
+                loop (Some ct) ( ThriftList (i-1, ct) :: rest)  state
+            | ThriftStruct :: rest, None ->
+                let ct, st = readNextField state
+                loop (Some ct) coll st
+            | _, Some CompactType.BooleanTrue
+            | _, Some CompactType.BooleanFalse ->
+                state |> loop None coll  
+            | _, Some CompactType.Byte ->
+                state.stream.Seek(1, SeekOrigin.Current) |> ignore
+                state |> loop None coll
+            | _, Some CompactType.I16 -> 
+               readI16 state |> snd |> loop None coll
+            | _, Some CompactType.I32 ->
+                readI32 state |> snd |> loop None coll
+            | _, Some CompactType.I64 ->
+                readI64 state |> snd |> loop None coll
+            | _, Some CompactType.Binary ->
+                readBinary state |> snd |> loop None coll
+            | ThriftStruct :: rest, Some CompactType.Stop -> state |> exitStruct |> loop None rest
+            | _, Some CompactType.Struct ->
+                loop None  (ThriftStruct :: coll) state
+            |_, Some CompactType.List ->
+                let (ct, eltType), state = readListHeader state
+                loop None (ThriftList(ct, eltType) :: coll) state                                      
+            | compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
+        loop (Some ct) [] st
 module File =
     let readThriftAsync (file: Stream) =
         async {

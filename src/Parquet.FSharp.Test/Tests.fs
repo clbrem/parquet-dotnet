@@ -2,7 +2,6 @@ module Tests
 
 open System.IO
 open Parquet
-open Parquet.Meta.Proto
 open Xunit
 
 type Assert<'T>() =
@@ -19,6 +18,62 @@ let (|Pop|_|) =
         Some a
     | s, _ ->
         None
+
+type ParquetType = 
+    | BOOLEAN = 0
+    | INT32 = 1
+    | INT64 = 2
+    | INT96 = 3
+    | FLOAT = 4
+    | DOUBLE = 5
+    | BYTE_ARRAY = 6
+    | FIXED_LEN_BYTE_ARRAY = 7
+type RepetitionType =
+    | REQUIRED = 0
+    | OPTIONAL = 1
+    | REPEATED = 2
+type ConvertedType =
+    | UTF8 = 0
+    | MAP = 1
+    | MAP_KEY_VALUE = 2
+    | LIST = 3
+    | ENUM = 4
+    | DECIMAL = 5
+    | DATE = 6
+    | TIME_MILLIS = 7
+    | TIME_MICROS = 8
+    | TIMESTAMP_MILLIS = 9
+    | TIMESTAMP_MICROS = 10
+    | UINT_8 = 11
+    | UINT_16 = 12
+    | UINT_32 = 13
+    | UINT_64 = 14
+    | INT_8 = 15
+    | INT_16 = 16
+    | INT_32 = 17
+    | INT_64 = 18
+    | JSON = 19
+    | BSON = 20
+    | INTERVAL = 21
+    
+    
+    
+    
+    
+    
+type SchemaElement = {
+    typ: ParquetType option
+    typLength: int option
+    repetitionType: RepetitionType option
+    name: string option
+    numChildren: int option
+    convertedType: 
+}
+
+let schemaElement (state: ThriftState) =
+    ThriftCompact.enterStruct state    
+    let loop acc state
+    
 
 let (|ReadChar|) =
     function
@@ -83,12 +138,13 @@ let ``Can Write Thrift``() =
         |> writeMiniStruct 2
         |> writeMiniStruct 3
         |> writeMiniStruct 4
-        |> ThriftCompact.exitStruct
+        |> ThriftCompact.writeStartStruct 2s
+        |> ThriftCompact.writeI16Field (1s, 2s)
+        |>ThriftCompact.exitStruct
         |> ThriftCompact.writeStopStruct
     state.stream.Flush()
-    state.stream.Position <- 0L    
+    state.stream.Position <- 0
     state
-    |> ThriftCompact.enterStruct
     |> ThriftCompact.readNextField
     |> function
         | CompactType.Stop, _ -> failwith "No fields"
@@ -97,16 +153,16 @@ let ``Can Write Thrift``() =
             |> ThriftCompact.readNextField
             |> function
                 | CompactType.Stop, _ -> Assert.True true
-                | cpt, _ -> failwith "no list"
+                | cpt, _ -> failwith "There's more"
         | _, _ -> failwith "no list"    
     
-            
+        
             
         
         
     
 
-//[<Fact>]
+[<Fact>]
 let ``Can Read Thrift``() =
     let state = streamFromTestFile "thrift/wide.bin"
                 |> ThriftState.create
@@ -120,7 +176,9 @@ let ``Can Read Thrift``() =
              & ThriftCompact.I32 (version, state) ->
             loop { acc with version = version } state
         | cpt, ThriftCompact.FieldId 2s ->
-            ThriftCompact.skip cpt state |> loop acc       
+            ThriftCompact.skip cpt state |> loop acc
+        | _, ThriftCompact.FieldId 3s ->
+            failwith "whoops"
         | _, ThriftCompact.FieldId 3s & ThriftCompact.I64 (numRows, state) ->
             loop {acc with numRows = numRows } state
         | cpt, ThriftCompact.FieldId 4s ->
