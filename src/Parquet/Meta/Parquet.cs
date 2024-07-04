@@ -108,7 +108,7 @@ namespace Parquet.Meta {
 
         /// <summary>
         /// An embedded JSON document  A JSON document embedded within a single UTF8 column.
-        /// </suommary>
+        /// </summary>
         JSON = 19,
 
         /// <summary>

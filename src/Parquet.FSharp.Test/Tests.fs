@@ -58,21 +58,61 @@ type ConvertedType =
     
     
     
-    
-    
-    
 type SchemaElement = {
-    typ: ParquetType option
-    typLength: int option
-    repetitionType: RepetitionType option
+    parquetType: int32 option
+    typeLength: int32 option
+    repetitionType: int32 option
     name: string option
-    numChildren: int option
-    convertedType: 
-}
+    numChildren: int32 option
+    precision: int32 option
+    fieldId: int32 option
+    logicalType: int32 option
+} with static member Default: SchemaElement =
+        {
+            parquetType = None
+            typeLength = None
+            repetitionType = None
+            name = None
+            numChildren = None
+            precision = None
+            fieldId = None
+            logicalType = None
+        }    
+    
+    
 
-let schemaElement (state: ThriftState) =
-    ThriftCompact.enterStruct state    
-    let loop acc state
+
+let schemaElement (state: ThriftState) =        
+    let rec loop (acc: SchemaElement) state =       
+        ThriftCompact.readNextField state
+        |> function
+        | CompactType.Stop, _ -> acc, state
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.I32 (parquetType, state) ->
+            loop { acc with parquetType = Some parquetType } state
+        | _, ThriftCompact.FieldId 2s & ThriftCompact.I32 (typeLength, state) ->
+            loop { acc with typeLength = Some typeLength } state
+        | _, ThriftCompact.FieldId 3s & ThriftCompact.I32 (repetitionType, state) ->
+            loop { acc with repetitionType = Some repetitionType } state
+        | _, ThriftCompact.FieldId 4s & ThriftCompact.String (name, state) ->
+            loop { acc with name = Some name } state
+        | _, ThriftCompact.FieldId 5s & ThriftCompact.I32 (numChildren, state) ->
+            loop { acc with numChildren = Some numChildren } state
+        | _, ThriftCompact.FieldId 6s & ThriftCompact.I32 (precision, state) ->
+            loop { acc with precision = Some precision } state
+        | _, ThriftCompact.FieldId 7s & ThriftCompact.I32 (fieldId, state) ->
+            loop { acc with fieldId = Some fieldId } state
+        | _, ThriftCompact.FieldId 8s & ThriftCompact.I32 (logicalType, state) ->
+            loop { acc with logicalType = Some logicalType } state
+        | cpt, state ->
+            state
+            |> ThriftCompact.skip cpt
+            |> loop acc
+    state
+     |> ThriftCompact.enterStruct
+     |> loop SchemaElement.Default
+     |> snd
+     |> ThriftCompact.exitStruct     
+      
     
 
 let (|ReadChar|) =
@@ -104,16 +144,7 @@ let ``StreamTricks``() =
     | ReadChar (_, 'h':: _ ) -> Assert.Fail "4"
     | _-> Assert.Fail "Whoops"
 
-type SchemaElement = {
-    parquetType: int option
-    typeLength: int option
-    repetitionType: int option
-    name: string option
-    numChildren: int option
-    precision: int option
-    fieldId: int option
-    logicalType: int option
-}
+
 type FileMetaData = {
     version: int
     schema: SchemaElement list
@@ -175,8 +206,9 @@ let ``Can Read Thrift``() =
         | _, ThriftCompact.FieldId 1s        
              & ThriftCompact.I32 (version, state) ->
             loop { acc with version = version } state
-        | cpt, ThriftCompact.FieldId 2s ->
-            ThriftCompact.skip cpt state |> loop acc
+        | _, ThriftCompact.FieldId 2s
+             & ThriftCompact.List ((count, CompactType.Struct), state) ->
+            loop acc state
         | _, ThriftCompact.FieldId 3s ->
             failwith "whoops"
         | _, ThriftCompact.FieldId 3s & ThriftCompact.I64 (numRows, state) ->

@@ -265,6 +265,17 @@ module ThriftCompact =
             (int size, eltType), state
     let (|List|) state =
         readListHeader state
+    let (|Collect|) collector state =
+        let (count,ct) , st = readListHeader state
+        [1 .. count]
+        |> List.fold
+               (
+                fun acc _ ->
+                  let v, s = collector st
+                  v :: (fst acc), s
+               )        
+               ([], st)
+        
     let (|String|) state =
         readString state
     let (|I64|) state =
