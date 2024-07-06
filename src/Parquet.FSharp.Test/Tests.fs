@@ -154,12 +154,30 @@ let readStatistics (state: ThriftState) =
             loop {acc with minValue = Some minValue} state
         | cpt, _ -> ThriftCompact.skip cpt state |> loop acc
     loop Statistics.Default state
-
+let (|Statistics|) =
+    readStatistics
 type PageEncodingStats = {
     pageType: PageType
     encoding: Encoding
     count: int32    
-}
+} with static member Default = {
+        pageType = PageType.DATA_PAGE
+        encoding = Encoding.PLAIN
+        count = 0
+    }
+let pageEncodingStats =
+    let rec loop acc state =
+        match ThriftCompact.readNextField state with
+        | CompactType.Stop, _ -> acc, ThriftCompact.exitStruct state
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.I32 (pageType, state) ->
+            loop {acc with pageType = enum pageType} state
+        | _, ThriftCompact.FieldId 2s & ThriftCompact.I32 (encoding, state) ->
+            loop {acc with encoding = enum encoding} state
+        | _, ThriftCompact.FieldId 3s & ThriftCompact.I32 (count, state) ->
+            loop {acc with count = count} state
+        | cpt, state -> ThriftCompact.skip cpt state |> loop acc
+    loop PageEncodingStats.Default
+        
 type ColumnMetadata = {
     columnType: ParquetType
     encodings: Encoding list
@@ -196,9 +214,10 @@ type ColumnMetadata = {
            bloomFilterLength = None
        }
     
-let columnMetaData (state: ThriftState) =
+let columnMetadata =
     let rec loop acc st =
-        match ThriftCompact.readNextField state with
+        match ThriftCompact.readNextField st with
+        | CompactType.Stop, state -> acc, ThriftCompact.exitStruct state
         | _, ThriftCompact.FieldId 1s & ThriftCompact.I32 (columnType, state) ->
             loop { acc with columnType = enum columnType } state
         | _, ThriftCompact.FieldId 2s
@@ -224,13 +243,20 @@ let columnMetaData (state: ThriftState) =
         | _, ThriftCompact.FieldId 9s & ThriftCompact.I64 (dataPageOffset, state) ->
             loop {acc with dataPageOffset = dataPageOffset} state
         | _, ThriftCompact.FieldId 10s & ThriftCompact.I64 (indexPageOffset, state) ->
-            loop {acc with indexPageOffset = Some index} state
+            loop {acc with indexPageOffset = Some indexPageOffset} state
         | _, ThriftCompact.FieldId 11s & ThriftCompact.I64 (dictionaryPageOffset, state) ->
             loop {acc with dictionaryPageOffset = Some dictionaryPageOffset} state
-        | _, ThriftCompact.FieldId 12s & state ->
-            // statistics
-            loop {acc with statistics = Some items} newState
-    
+        | _, ThriftCompact.FieldId 12s & Statistics (stats, state) ->  
+            loop {acc with statistics = Some stats} state
+        | _, ThriftCompact.FieldId 13s & ThriftCompact.Collect pageEncodingStats (items, state) ->
+            loop { acc with encodingStats = items } state
+        | _, ThriftCompact.FieldId 14s & ThriftCompact.I64 (bloomFilterOffset, state) ->
+            loop { acc with bloomFilterOffset = Some bloomFilterOffset } state
+        | _, ThriftCompact.FieldId 15s & ThriftCompact.I32 (bloomFilterLength, state) ->
+            loop { acc with bloomFilterLength = Some bloomFilterLength } state
+        | cpt, state -> ThriftCompact.skip cpt state |> loop acc
+    loop ColumnMetadata.Default
+let (|ColumnMetadata|) = columnMetadata
 type EncryptionWithFooterKey =
     private EncryptionWithFooterKey of unit
     with static member Default = EncryptionWithFooterKey ()
@@ -248,7 +274,21 @@ type SortingColumn =
 type ColumnCryptoMetadata = {
     encryptionWithFooterKey: EncryptionWithFooterKey option
     encryptionWithColumnKey: EncryptionWithColumnKey option
-}
+} with static member Default = {
+        encryptionWithFooterKey = None
+        encryptionWithColumnKey = None
+    }
+let columnCryptoMetadata =
+    let rec loop acc state =
+        match ThriftCompact.readNextField state with
+        | CompactType.Stop, _ -> acc, ThriftCompact.exitStruct state
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.Collect keyValue (items, state) ->
+            loop { acc with encryptionWithColumnKey = Some items } state
+        | _, ThriftCompact.FieldId 2s & EncryptionWithFooterKey (_, state) ->
+            loop { acc with encryptionWithFooterKey = Some EncryptionWithFooterKey.Default } state
+        | cpt, state -> ThriftCompact.skip cpt state |> loop acc
+    loop ColumnCryptoMetadata.
+
 type ColumnChunk =
     {
         filePath: string option
@@ -261,6 +301,43 @@ type ColumnChunk =
         cryptoMetadata: ColumnCryptoMetadata option
         encryptedColumnMetadata: byte []
     }
+    with static member Default = {
+            filePath = None
+            fileOffset = None
+            metaData = None
+            offsetIndexOffset = None
+            offsetIndexLength = None
+            columnIndexOffset = None
+            columnIndexLength = None
+            cryptoMetadata = None
+            encryptedColumnMetadata = [||]
+        }
+let columnChunk =
+    let rec loop acc state =
+        match ThriftCompact.readNextField state with
+        | CompactType.Stop, _ -> acc, ThriftCompact.exitStruct state
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.String (filePath, state) ->
+            loop { acc with filePath = Some filePath } state
+        | _, ThriftCompact.FieldId 2s & ThriftCompact.I64 (fileOffset, state) ->
+            loop { acc with fileOffset = Some fileOffset } state
+        | _, ThriftCompact.FieldId 3s & ColumnMetadata (metaData, state) ->
+            loop { acc with metaData = Some metaData } state
+        | _, ThriftCompact.FieldId 4s & ThriftCompact.I64 (offsetIndexOffset, state) ->
+            loop { acc with offsetIndexOffset = Some offsetIndexOffset } state
+        | _, ThriftCompact.FieldId 5s & ThriftCompact.I32 (offsetIndexLength, state) ->
+            loop { acc with offsetIndexLength = Some offsetIndexLength } state
+        | _, ThriftCompact.FieldId 6s & ThriftCompact.I64 (columnIndexOffset, state) ->
+            loop { acc with columnIndexOffset = Some columnIndexOffset } state
+        | _, ThriftCompact.FieldId 7s & ThriftCompact.I32 (columnIndexLength, state) ->
+            loop { acc with columnIndexLength = Some columnIndexLength } state
+        | _, ThriftCompact.FieldId 8s & ThriftCompact.Collect columnCryptoMetadata (items, state) ->
+            loop { acc with cryptoMetadata = Some items } state
+        | _, ThriftCompact.FieldId 9s & ThriftCompact.Binary (encryptedColumnMetadata, state) ->
+            loop { acc with encryptedColumnMetadata = encryptedColumnMetadata } state
+        | cpt, state -> ThriftCompact.skip cpt state |> loop acc
+    loop ColumnChunk.Default
+        
+    
 type RowGroup =
     {
         columns: ColumnChunk list
@@ -268,6 +345,7 @@ type RowGroup =
         numRows: int64
         sortingColumns: SortingColumn list
     }
+    
 
 
 let schemaElement (state: ThriftState) =        
@@ -321,7 +399,7 @@ let streamFromTestFile name =
     File.OpenRead($"./data/{name}")
         
 [<Fact>]
-let ``StreamTricks``() =    
+let ``Stream Tricks``() =    
     use s = streamFromText "hello pardner"
     let mini = s, []
     match mini with
