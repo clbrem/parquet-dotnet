@@ -327,7 +327,7 @@ module ThriftCompact =
             |_, Some CompactType.List ->
                 let (ct, eltType), state = readListHeader state
                 loop None (ThriftList(ct, eltType) :: coll) state                                      
-            | compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
+            |_, Some compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
         loop (Some ct) [] st
 module File =
     let readThriftAsync (file: Stream) =

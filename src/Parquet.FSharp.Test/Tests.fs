@@ -18,7 +18,25 @@ let (|Pop|_|) =
         Some a
     | s, _ ->
         None
-
+type Encoding =
+    | PLAIN = 0
+    | PLAIN_DICTIONARY = 2
+    | RLE = 3
+    | BIT_PACKED = 4
+    | DELTA_BINARY_PACKED = 5
+    | DELTA_LENGTH_BYTE_ARRAY = 6
+    | DELTA_BYTE_ARRAY = 7
+    | RLE_DICTIONARY = 8
+    | BYTE_STREAM_SPLIT = 9
+type CompressionCodec =
+    | UNCOMPRESSED = 0
+    | SNAPPY = 1
+    | GZIP = 2
+    | LZO = 3
+    | BROTLI = 4
+    | LZ4 = 5
+    | ZSTD = 6
+    | LZ4_RAW = 7
 type ParquetType = 
     | BOOLEAN = 0
     | INT32 = 1
@@ -41,7 +59,7 @@ type ConvertedType =
     | DECIMAL = 5
     | DATE = 6
     | TIME_MILLIS = 7
-    | TIME_MICROS = 8
+    | TIME_MICROS = 8   
     | TIMESTAMP_MILLIS = 9
     | TIMESTAMP_MICROS = 10
     | UINT_8 = 11
@@ -55,8 +73,15 @@ type ConvertedType =
     | JSON = 19
     | BSON = 20
     | INTERVAL = 21
-    
-    
+type PageType  =
+    | DATA_PAGE = 0
+    | INDEX_PAGE = 1
+    | DICTIONARY_PAGE = 2
+    | DATA_PAGE_V2 = 3
+type KeyValue = {
+    key: string
+    value: string option
+}  
     
 type SchemaElement = {
     parquetType: int32 option
@@ -77,16 +102,83 @@ type SchemaElement = {
             precision = None
             fieldId = None
             logicalType = None
-        }    
+        }
+type Statistics = {
+    max: byte list 
+    min: byte list
+    nullCount: int64 option
+    distinctCount: int64 option
+    maxValue: byte list option
+    minValue: byte list option
+}
+
+type PageEncodingStats = {
+    pageType: PageType
+    encoding: Encoding
+    count: int32    
+}
+type ColumnMetadata = {
+    columnType: ParquetType
+    encodings: Encoding list
+    pathInSchema: string list
+    codec: CompressionCodec
+    numValues: int64
+    totalUncompressedSize: int64
+    totalCompressedSize: int64
+    keyValueMetadata: KeyValue list
+    dataPageOffset: int64
+    indexPageOffset: int64 option
+    dictionaryPageOffset: int64 option
+    statistics: Statistics option
+    encodingStats: PageEncodingStats list
+    bloomFilterOffset: int64 option
+    bloomFilterLength: int option
     
-    
+}
+type EncryptionWithFooterKey =
+    private EncryptionWithFooterKey of unit
+    with static member Default = EncryptionWithFooterKey ()
+type EncryptionWithColumnKey =
+    {
+        PathInSchema : string list
+        keyMetadata: byte list option
+    }
+type SortingColumn =
+    {
+        columnIdx : int
+        descending: bool
+        nullsFirst: bool
+    }
+type ColumnCryptoMetadata = {
+    encryptionWithFooterKey: EncryptionWithFooterKey option
+    encryptionWithColumnKey: EncryptionWithColumnKey option
+}
+type ColumnChunk =
+    {
+        filePath: string option
+        fileOffset: int64 option
+        metaData: ColumnMetadata option
+        offsetIndexOffset: int64 option
+        offsetIndexLength: int32 option
+        columnIndexOffset: int64 option
+        columnIndexLength: int32 option
+        cryptoMetadata: ColumnCryptoMetadata option
+        encryptedColumnMetadata: byte []
+    }
+type RowGroup =
+    {
+        columns: ColumnChunk list
+        totalByteSize: int64
+        numRows: int64
+        sortingColumns: SortingColumn list
+    }
 
 
 let schemaElement (state: ThriftState) =        
     let rec loop (acc: SchemaElement) state =       
         ThriftCompact.readNextField state
         |> function
-        | CompactType.Stop, _ -> acc, state
+        | CompactType.Stop, _ -> acc, ThriftCompact.exitStruct state
         | _, ThriftCompact.FieldId 1s & ThriftCompact.I32 (parquetType, state) ->
             loop { acc with parquetType = Some parquetType } state
         | _, ThriftCompact.FieldId 2s & ThriftCompact.I32 (typeLength, state) ->
@@ -109,9 +201,8 @@ let schemaElement (state: ThriftState) =
             |> loop acc
     state
      |> ThriftCompact.enterStruct
-     |> loop SchemaElement.Default
-     |> snd
-     |> ThriftCompact.exitStruct     
+     |> loop SchemaElement.Default     
+     
       
     
 
@@ -145,7 +236,7 @@ let ``StreamTricks``() =
     | _-> Assert.Fail "Whoops"
 
 
-type FileMetaData = {
+type FileMetadata = {
     version: int
     schema: SchemaElement list
     numRows: int64
@@ -207,10 +298,8 @@ let ``Can Read Thrift``() =
              & ThriftCompact.I32 (version, state) ->
             loop { acc with version = version } state
         | _, ThriftCompact.FieldId 2s
-             & ThriftCompact.List ((count, CompactType.Struct), state) ->
-            loop acc state
-        | _, ThriftCompact.FieldId 3s ->
-            failwith "whoops"
+             & ThriftCompact.Collect schemaElement (items, state)  ->
+            loop {acc with schema = items} state
         | _, ThriftCompact.FieldId 3s & ThriftCompact.I64 (numRows, state) ->
             loop {acc with numRows = numRows } state
         | cpt, ThriftCompact.FieldId 4s ->
@@ -229,7 +318,7 @@ let ``Can Read Thrift``() =
             state
             |> ThriftCompact.skip compactType
             |> loop acc
-    let out, st = loop (FileMetaData.Default()) state
+    let out, st = loop (FileMetadata.Default()) state
     Assert.Fail $"{out}"
     
             
