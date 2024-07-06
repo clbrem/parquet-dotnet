@@ -2,6 +2,7 @@ module Tests
 
 open System.IO
 open Parquet
+open Parquet.Meta
 open Xunit
 
 type Assert<'T>() =
@@ -81,7 +82,23 @@ type PageType  =
 type KeyValue = {
     key: string
     value: string option
-}  
+}
+let keyValue (state: ThriftState) =
+    let rec loop (acc: KeyValue) state =
+        ThriftCompact.readNextField state
+        |> function
+            | CompactType.Stop, _ -> acc, ThriftCompact.exitStruct state
+            | _, ThriftCompact.FieldId 1s & ThriftCompact.String (key, state) ->
+                loop { acc with key = key } state
+            | _, ThriftCompact.FieldId 2s & ThriftCompact.String (value, state) ->
+                loop { acc with value = Some value } state
+            | cpt, state ->
+                state            
+                |> ThriftCompact.skip cpt
+                |> loop acc
+    state
+    |> ThriftCompact.enterStruct
+    |> loop { key = ""; value = None } 
     
 type SchemaElement = {
     parquetType: int32 option
@@ -104,13 +121,39 @@ type SchemaElement = {
             logicalType = None
         }
 type Statistics = {
-    max: byte list 
-    min: byte list
+    max: byte [] 
+    min: byte []
     nullCount: int64 option
     distinctCount: int64 option
-    maxValue: byte list option
-    minValue: byte list option
-}
+    maxValue: byte[] option
+    minValue: byte[] option
+} with static member Default: Statistics =
+        {
+            max = [||]
+            min = [||]
+            nullCount = None
+            distinctCount = None
+            maxValue = None
+            minValue = None
+        }
+let readStatistics (state: ThriftState) =
+    let rec loop acc state =
+        match ThriftCompact.readNextField state with
+        | CompactType.Stop, _ -> acc, ThriftCompact.exitStruct state
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.Binary (max, state) ->
+            loop {acc with max = max} state
+        | _, ThriftCompact.FieldId 2s & ThriftCompact.Binary (min, state) ->
+            loop {acc with min = min} state
+        | _, ThriftCompact.FieldId 3s & ThriftCompact.I64 (nullCount, state) ->
+            loop {acc with nullCount = Some nullCount} state
+        | _, ThriftCompact.FieldId 4s & ThriftCompact.I64 (distinctCount, state) ->
+            loop {acc with distinctCount = Some distinctCount} state
+        | _, ThriftCompact.FieldId 5s & ThriftCompact.Binary (maxValue, state) ->
+            loop {acc with maxValue = Some maxValue} state
+        | _, ThriftCompact.FieldId 6s & ThriftCompact.Binary (minValue, state) ->
+            loop {acc with minValue = Some minValue} state
+        | cpt, _ -> ThriftCompact.skip cpt state |> loop acc
+    loop Statistics.Default state
 
 type PageEncodingStats = {
     pageType: PageType
@@ -132,9 +175,62 @@ type ColumnMetadata = {
     statistics: Statistics option
     encodingStats: PageEncodingStats list
     bloomFilterOffset: int64 option
-    bloomFilterLength: int option
+    bloomFilterLength: int option    
+} with
+   static member Default: ColumnMetadata  =
+       {
+           columnType = enum 0
+           encodings = []
+           pathInSchema = []
+           codec = enum 0
+           numValues = 0L
+           totalUncompressedSize = 0L
+           totalCompressedSize = 0L
+           keyValueMetadata = []
+           dataPageOffset = 0L
+           indexPageOffset = None
+           dictionaryPageOffset = None
+           statistics = None
+           encodingStats = []
+           bloomFilterOffset = None
+           bloomFilterLength = None
+       }
     
-}
+let columnMetaData (state: ThriftState) =
+    let rec loop acc st =
+        match ThriftCompact.readNextField state with
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.I32 (columnType, state) ->
+            loop { acc with columnType = enum columnType } state
+        | _, ThriftCompact.FieldId 2s
+             & ThriftCompact.Collect
+                 ThriftCompact.readI32 (items, newState) ->
+            loop {acc with encodings = List.map enum items} newState
+        | _, ThriftCompact.FieldId 3s
+             & ThriftCompact.Collect
+                 ThriftCompact.readString (items, newState) ->
+            loop {acc with pathInSchema = items} newState
+        | _, ThriftCompact.FieldId 4s & ThriftCompact.I32 (codec, state) ->
+            loop {acc with codec = enum codec} state
+        | _, ThriftCompact.FieldId 5s & ThriftCompact.I64 (numValues, state) ->
+            loop {acc with numValues = numValues} state
+        | _, ThriftCompact.FieldId 6s & ThriftCompact.I64 (totalUncompressedSize, state) ->
+            loop {acc with totalUncompressedSize = totalUncompressedSize} state
+        | _, ThriftCompact.FieldId 7s & ThriftCompact.I64 (totalCompressedSize, state) ->
+            loop {acc with totalCompressedSize = totalCompressedSize} state
+        | _, ThriftCompact.FieldId 8s
+             & ThriftCompact.Collect
+                 keyValue (items, newState) ->
+            loop {acc with keyValueMetadata = items} newState
+        | _, ThriftCompact.FieldId 9s & ThriftCompact.I64 (dataPageOffset, state) ->
+            loop {acc with dataPageOffset = dataPageOffset} state
+        | _, ThriftCompact.FieldId 10s & ThriftCompact.I64 (indexPageOffset, state) ->
+            loop {acc with indexPageOffset = Some index} state
+        | _, ThriftCompact.FieldId 11s & ThriftCompact.I64 (dictionaryPageOffset, state) ->
+            loop {acc with dictionaryPageOffset = Some dictionaryPageOffset} state
+        | _, ThriftCompact.FieldId 12s & state ->
+            // statistics
+            loop {acc with statistics = Some items} newState
+    
 type EncryptionWithFooterKey =
     private EncryptionWithFooterKey of unit
     with static member Default = EncryptionWithFooterKey ()
@@ -288,7 +384,7 @@ let ``Can Write Thrift``() =
 let ``Can Read Thrift``() =
     let state = streamFromTestFile "thrift/wide.bin"
                 |> ThriftState.create
-                |> ThriftCompact.enterStruct    
+                |> ThriftCompact.enterStruct
     let rec loop acc =
         ThriftCompact.readNextField >>
         function
@@ -312,7 +408,7 @@ let ``Can Read Thrift``() =
             ThriftCompact.skip cpt state |> loop acc
         | cpt, ThriftCompact.FieldId 8s ->
             ThriftCompact.skip cpt state |> loop acc
-        | cpt, ThriftCompact.FieldId 9s ->
+        | cpt, ThriftCompact.FieldId 9s ->            
             ThriftCompact.skip cpt state |> loop acc            
         | compactType, state ->
             state

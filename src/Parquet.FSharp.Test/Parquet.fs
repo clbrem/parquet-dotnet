@@ -205,7 +205,7 @@ module ThriftCompact =
             else
                 loop acc (shift + 7)
         loop 0UL 0, state
-    let private readByte (state: ThriftState) =
+    let readByte (state: ThriftState) =
         state.stream.ReadByte() |> sbyte, state
     
     let writeStartStruct fieldId  =
@@ -229,15 +229,15 @@ module ThriftCompact =
         newState.stream.WriteByte(byte b)
         newState
             
-    let private readI32 (state: ThriftState) =
+    let readI32 (state: ThriftState) =
         let i, s = (readVarInt32 state)
         zigZagToInt32 i, s
     
-    let private readI64 (state: ThriftState) =
+    let readI64 (state: ThriftState) =
         let i, s = (readVarInt64 state)
         zigZagToInt64 i, s
     
-    let private readBinary (state: ThriftState) =
+    let readBinary (state: ThriftState) =
         let uLen, s = readVarInt32 state
         let len = int uLen
         if (len = 0 ) then
@@ -245,7 +245,7 @@ module ThriftCompact =
         else
             Stream.readBytes len s.stream, s
    
-    let private readString (state: ThriftState) =
+    let readString (state: ThriftState) =
         let uLen, s = readVarInt32 state
         let len = int uLen
         if (len = 0 ) then
@@ -282,6 +282,8 @@ module ThriftCompact =
         readI64 state
     let (|I32|) state =
         readI32 state
+    let (|Binary|) state =
+        readBinary state
 
     let readNextField state: CompactType * ThriftState =
         let header = state.stream.ReadByte()
