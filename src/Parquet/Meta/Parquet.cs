@@ -2159,7 +2159,6 @@ namespace Parquet.Meta {
 
         internal void Write(ThriftCompactProtocolWriter proto) {
             proto.StructBegin();
-
             // 1: PathInSchema, list
             proto.WriteListBegin(1, 8, PathInSchema.Count);
             foreach(string element in PathInSchema) {

@@ -282,8 +282,10 @@ module ThriftCompact =
         readI64 state
     let (|I32|) state =
         readI32 state
+    let (|I16|) = readI16
     let (|Binary|) state =
         readBinary state
+        
 
     let readNextField state: CompactType * ThriftState =
         let header = state.stream.ReadByte()
