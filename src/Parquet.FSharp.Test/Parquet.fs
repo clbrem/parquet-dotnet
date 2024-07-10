@@ -254,6 +254,7 @@ module ThriftCompact =
             System.Text.Encoding.UTF8.GetString(Stream.readBytes len s.stream, 0, len)
             , s
     
+            
     let private readListHeader (state: ThriftState) =
         let sizeAndType = state.stream.ReadByte()
         let size = sizeAndType >>> 4 &&& 0x0f
@@ -285,6 +286,8 @@ module ThriftCompact =
     let (|I16|) = readI16
     let (|Binary|) state =
         readBinary state
+    
+    
         
 
     let readNextField state: CompactType * ThriftState =
@@ -333,6 +336,8 @@ module ThriftCompact =
                 loop None (ThriftList(ct, eltType) :: coll) state                                      
             |_, Some compactType-> InvalidOperationException($"Can't skip type {compactType}.") |> raise
         loop (Some ct) [] st
+    let (|EmptyStruct|) st =
+        skip CompactType.Struct st
 module File =
     let readThriftAsync (file: Stream) =
         async {

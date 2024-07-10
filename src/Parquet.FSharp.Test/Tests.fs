@@ -177,7 +177,7 @@ let pageEncodingStats =
             loop {acc with count = count} state
         | cpt, state -> ThriftCompact.skip cpt state |> loop acc
     ThriftCompact.enterStruct >> loop PageEncodingStats.Default
-        
+     
 type ColumnMetadata = {
     columnType: ParquetType
     encodings: Encoding list
@@ -338,6 +338,7 @@ let columnCryptoMetadata =
             loop { acc with encryptionWithColumnKey = Some enc } state
         | cpt, state -> ThriftCompact.skip cpt state |> loop acc
     ThriftCompact.enterStruct >> loop ColumnCryptoMetadata.Default
+    
 let (|ColumnCryptoMetadata|) = columnCryptoMetadata
 type ColumnChunk =
     {
@@ -386,8 +387,57 @@ let columnChunk =
             loop { acc with encryptedColumnMetadata = encryptedColumnMetadata } state
         | cpt, state -> ThriftCompact.skip cpt state |> loop acc
     ThriftCompact.enterStruct >> loop ColumnChunk.Default
-        
-    
+
+type ColumnOrder = |TypeDefinedOrder | Unordered
+
+type AesGcmV1 = {
+    aadPrefix: byte [] option
+    aadFileUnique: byte [] option
+    supplyAadPrefix: bool option
+} with static member Default = {
+        aadPrefix = None
+        aadFileUnique = None
+        supplyAadPrefix = None
+        }
+let aesGcmV1 =
+    let rec loop acc =
+        ThriftCompact.readNextField >>
+        function
+        | CompactType.Stop, st -> acc, ThriftCompact.exitStruct st
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.Binary (aadPrefix, state) ->
+            loop { acc with aadPrefix = Some aadPrefix } state
+        | _, ThriftCompact.FieldId 2s & ThriftCompact.Binary (aadFileUnique, state) ->
+            loop { acc with aadFileUnique = Some aadFileUnique } state
+        | CompactType.BooleanTrue, ThriftCompact.FieldId 3s & state ->
+            loop { acc with supplyAadPrefix = Some true } state
+        | CompactType.BooleanFalse, ThriftCompact.FieldId 3s & state ->
+            loop { acc with supplyAadPrefix = Some true } state
+        | ct, st -> ThriftCompact.skip ct st |> loop acc
+    ThriftCompact.enterStruct >> loop AesGcmV1.Default
+let (|AesGcm|) = aesGcmV1
+type EncryptionAlgorithm = | AesGcmV1 of AesGcmV1 | AesGcmCtrV1 of AesGcmV1 | NoEncryption
+
+
+let encryptionAlgorithm =
+    let rec loop acc =
+        ThriftCompact.readNextField >>
+        function
+        | CompactType.Stop, st -> acc, ThriftCompact.exitStruct st
+        | _, ThriftCompact.FieldId 1s & AesGcm (algo, state) ->
+            loop (AesGcmV1 algo) state
+        | _, ThriftCompact.FieldId 2s & AesGcm (algo, state) ->
+            loop (AesGcmCtrV1 algo) state
+        | cpt, st -> ThriftCompact.skip cpt st |> loop acc
+    ThriftCompact.enterStruct >> loop NoEncryption
+let (|Encryption|) = encryptionAlgorithm
+let columnOrder =
+    let rec loop acc state =
+        match ThriftCompact.readNextField state with
+        | CompactType.Stop, st -> acc, ThriftCompact.exitStruct st
+        | _, ThriftCompact.FieldId 1s & ThriftCompact.EmptyStruct st ->
+            loop TypeDefinedOrder st
+        | ct, st -> ThriftCompact.skip ct st |> loop acc
+    ThriftCompact.enterStruct >> loop ColumnOrder.Unordered
 type RowGroup =
     {
         columns: ColumnChunk list
@@ -577,19 +627,18 @@ let ``Can Read Thrift``() =
             loop {acc with schema = items} state
         | _, ThriftCompact.FieldId 3s & ThriftCompact.I64 (numRows, state) ->
             loop {acc with numRows = numRows } state        
-        | cpt, ThriftCompact.FieldId 4s & ThriftCompact.Collect rowGroup (items, state)->
+        | _, ThriftCompact.FieldId 4s & ThriftCompact.Collect rowGroup (items, state)->
             loop { acc with rowGroups = items } state
-        | cpt, ThriftCompact.FieldId 5s & ThriftCompact.Collect keyValue (items, state) ->
-            loop { acc with keyValueMetadata = Some items } state
- 
+        | _, ThriftCompact.FieldId 5s & ThriftCompact.Collect keyValue (items, state) ->
+            loop { acc with keyValueMetadata = Some items } state 
         | _, ThriftCompact.FieldId 6s & ThriftCompact.String(createdBy, state) ->
             loop {acc with createdBy = Some createdBy } state
-        | cpt, ThriftCompact.FieldId 7s & ThriftCompact.Collect columnOrder ->
-            
-        | cpt, ThriftCompact.FieldId 8s ->
-            ThriftCompact.skip cpt state |> loop acc
-        | cpt, ThriftCompact.FieldId 9s ->            
-            ThriftCompact.skip cpt state |> loop acc            
+        | _, ThriftCompact.FieldId 7s & ThriftCompact.Collect columnOrder (cols, state) ->
+            loop {acc with columnOrders = Some cols} state
+        | _, ThriftCompact.FieldId 8s & Encryption (alg, state) ->
+            loop { acc with encryptionAlgorithm = Some alg } state 
+        | _, ThriftCompact.FieldId 9s & ThriftCompact.Binary (footerSigningKeyMetadata, state) ->
+            loop {acc with footerSigningKeyMetadata = Some footerSigningKeyMetadata } state        
         | compactType, state ->
             state
             |> ThriftCompact.skip compactType
