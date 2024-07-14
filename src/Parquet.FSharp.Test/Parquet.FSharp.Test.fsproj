@@ -11,6 +11,7 @@
         <ProjectReference Include="..\Parquet\Parquet.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <Compile Include="ThriftCompact.fs" />
         <Compile Include="Parquet.fs" />
         <Compile Include="Tests.fs"/>
         <Compile Include="Program.fs"/>

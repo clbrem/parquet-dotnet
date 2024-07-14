@@ -1,17 +1,25 @@
-﻿using Xunit;
+﻿using System;
+using Xunit;
 using Parquet.Meta.Proto;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Parquet.Meta;
+using Xunit.Abstractions;
+using Xunit.Sdk;
 
 namespace Parquet.Test {
     public class ThriftTest : TestBase {
+
         [Fact]
-        public void TestFileRead_Table() {
+        public void TestFileRead_Table() {            
             using Stream fs = OpenTestFile("thrift/wide.bin");
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var fileMeta = FileMetaData.Read(new ThriftCompactProtocolReader(fs));
+            stopwatch.Stop();
+            Assert.Fail($"time is {stopwatch.ElapsedMilliseconds}");
         }
+
         [Fact]
         public async Task TestFile() {
             await using Stream fs = new MemoryStream();
