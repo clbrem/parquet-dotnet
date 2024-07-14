@@ -605,4 +605,10 @@ module File =
             let! footerData = file |> readBytesAsync footerSize
             return ()
         }
+    let readMetadata =
+        function
+        | ThriftState.Seek (-8, SeekOrigin.End) state->
+
+            
+        
 

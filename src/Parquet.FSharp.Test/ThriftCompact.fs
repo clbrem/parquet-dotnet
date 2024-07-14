@@ -28,13 +28,18 @@ module Stream =
                 loop (read + r) buffer            
         let tmp = Array.create i 0uy
         loop 0 tmp
-
 type ThriftState = {
     stream: Stream
     stack: int16 list
     }
 module ThriftState =
     let create stream = { stream = stream; stack = [] }
+    let seek (offset, origin) (state: ThriftState) =        
+        state.stream.Seek(offset, origin) |> ignore
+        state
+    let (|Seek|) (offset, origin) (state: ThriftState) =
+        seek (offset, origin) state 
+    
 module ThriftCompact =
     let mutable private varInt = Array.create 10 0uy
     let mutable private varIntCount = 0
