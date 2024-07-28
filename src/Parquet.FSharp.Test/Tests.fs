@@ -83,7 +83,13 @@ let ``Can Read Thrift``() =
     Parquet.fileMetadata state |> ignore
     stopwatch.Stop()    
     Assert.FailWith "Time is %i" stopwatch.ElapsedMilliseconds
-
+[<Fact>]
+let ``Can Validate``() =
+    let state = streamFromTestFile "customer.impala.parquet" |> ThriftState.create
+    match state with
+    | File.CheckSum ()
+            -> Assert.True true
+    | _ -> Assert.Fail "Not a checksum"
 
     
             

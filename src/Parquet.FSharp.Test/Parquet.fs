@@ -503,8 +503,6 @@ module Parquet =
          |> ThriftCompact.enterStruct
          |> loop SchemaElement.Default     
          
-          
-        
     
     let (|ReadChar|) =
         function
@@ -576,7 +574,13 @@ module Parquet =
                 |> ThriftCompact.skip compactType
                 |> loop acc
         ThriftCompact.enterStruct >> loop (FileMetadata.Default())
-module File = 
+module File =    
+    let magicBytes = System.Text.Encoding.ASCII.GetBytes("PAR1");
+    let (|Exactly|) n (f: ThriftState)=
+        let buff = Array.create n 0uy
+        do f.stream.ReadExactly(buff, 0, n)
+        buff
+        
     let readInt32Async(stream: Stream) =
         async {
             let tmp = Array.create sizeof<int> 0uy
@@ -605,10 +609,8 @@ module File =
             let! footerData = file |> readBytesAsync footerSize
             return ()
         }
-    let readMetadata =
+    let (|CheckSum|_|) =
         function
-        | ThriftState.Seek (-8, SeekOrigin.End) state->
-
-            
-        
-
+        | ThriftState.Seek(0, SeekOrigin.Begin) (Exactly 4 startKey)
+          & ThriftState.Seek (-4, SeekOrigin.End) (Exactly 4 endKey) ->
+            if startKey = magicBytes && endKey = magicBytes then Some () else None
