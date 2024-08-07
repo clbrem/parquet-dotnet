@@ -10,6 +10,8 @@ type Assert<'T>() =
            Assert.Fail(sprintf f a) 
       static member EqualTo (a:'T) (b:'T) =
           Assert.Equal<'T>(a,b)
+      static member Pass =
+          ()
 
       
     
@@ -91,12 +93,13 @@ let ``Can Validate``() =
             -> Assert.True true
     | _ -> Assert.Fail "Not a checksum"
 
+[<Fact>]
+let ``Can Read Metadata``() =
+    let state = streamFromTestFile "customer.impala.parquet" |> ThriftState.create
+    match state with
+    | File.Metadata md
+            -> Assert.Pass
     
-            
-            
-            
     
-        
-
     
     

@@ -574,6 +574,8 @@ module Parquet =
                 |> ThriftCompact.skip compactType
                 |> loop acc
         ThriftCompact.enterStruct >> loop (FileMetadata.Default())
+    let (|FileMetadata|) st =
+         FileMetadata fileMetadata st |> fst
 module File =    
     let magicBytes = System.Text.Encoding.ASCII.GetBytes("PAR1");
     let (|Exactly|) n (f: ThriftState)=
@@ -587,6 +589,12 @@ module File =
             let! _ = stream.ReadAsync(tmp, 0, sizeof<int>) |> Async.AwaitTask
             return BitConverter.ToInt32(tmp,0)
         }
+    let readInt32 (stream: Stream) =
+            let tmp = Array.create sizeof<int> 0uy
+            do stream.Read(tmp, 0, sizeof<int>) |> ignore 
+            BitConverter.ToInt32(tmp,0)
+    let (|Int32|) (st: ThriftState)  =
+        Int32 readInt32 (st.stream)
 
     let readBytesAsync i (stream: Stream) =
         async {
@@ -609,8 +617,21 @@ module File =
             let! footerData = file |> readBytesAsync footerSize
             return ()
         }
-    let (|CheckSum|_|) =
-        function
-        | ThriftState.Seek(0, SeekOrigin.Begin) (Exactly 4 startKey)
-          & ThriftState.Seek (-4, SeekOrigin.End) (Exactly 4 endKey) ->
+    let (|CheckSum|_|) (st: ThriftState) =
+        match st with 
+        | ThriftState.Seek (0, SeekOrigin.Begin)(Exactly 4 startKey)
+          & ThriftState.Seek (-4, SeekOrigin.End)(Exactly 4 endKey) ->
             if startKey = magicBytes && endKey = magicBytes then Some () else None
+    
+    let (|Metadata|)  =
+        // find length of metadata
+        function            
+        | ThriftState.Seek (-8, SeekOrigin.End) (Int32 footerLength) & state ->
+            let offset = -8 - footerLength
+            match state with
+            | ThriftState.Seek ( offset, SeekOrigin.End) (Parquet.FileMetadata meta) ->
+                meta
+                
+            
+            
+            

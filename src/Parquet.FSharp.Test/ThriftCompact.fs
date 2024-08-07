@@ -38,7 +38,7 @@ module ThriftState =
         state.stream.Seek(offset, origin) |> ignore
         state
     let (|Seek|) (offset, origin) (state: ThriftState) =
-        seek (offset, origin) state 
+        seek (offset, origin) state  
     
 module ThriftCompact =
     let mutable private varInt = Array.create 10 0uy
@@ -298,14 +298,14 @@ module ThriftCompact =
                 loop None rest state
             | ThriftList (i, ct) :: rest, None ->
                 loop (Some ct) ( ThriftList (i-1, ct) :: rest)  state
-            | ThriftStruct :: rest, None ->
+            | ThriftStruct :: _, None ->
                 let ct, st = readNextField state
                 loop (Some ct) coll st
             | _, Some CompactType.BooleanTrue
             | _, Some CompactType.BooleanFalse ->
                 state |> loop None coll  
             | _, Some CompactType.Byte ->
-                state.stream.Seek(1, SeekOrigin.Current) |> ignore
+                ThriftState.seek(1, SeekOrigin.Current) state 
                 state |> loop None coll
             | _, Some CompactType.I16 -> 
                readI16 state |> snd |> loop None coll
