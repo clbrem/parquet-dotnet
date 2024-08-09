@@ -98,7 +98,9 @@ let ``Can Read Metadata``() =
     let state = streamFromTestFile "customer.impala.parquet" |> ThriftState.create
     match state with
     | File.Metadata md
-            -> Assert.Pass
+            ->
+                printf $"%A{md}"
+                Assert.Pass
     
     
     
