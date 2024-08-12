@@ -1,5 +1,6 @@
 namespace Parquet
 open System
+open System.Text
 
 type Salt = private Salt of uint32 []
 type SaltException() = inherit Exception("Salt can only be built from 8 odd uint32 values.")
@@ -26,7 +27,19 @@ module Salt =
 
 module Block =
     let empty = Array.zeroCreate 8
-    
+    let private printWord =
+        let rec loop i acc wd=
+            if i = 32
+            then
+                acc.ToString()
+            else
+                acc +  (wd &&& 1u |> string)
+                |> loop (i+1)
+                <| (wd >>> 1)
+        
+        "" |> loop 0
+    let printBlock: Block -> string =
+        Array.map printWord >> String.concat Environment.NewLine
     let mask (salt: Salt) (x: uint32) : Block =
          Salt.mul salt x
          |> Array.map2 (
