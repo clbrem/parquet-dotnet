@@ -12,7 +12,11 @@ module Salt =
     let rndUint32 (rnd: Random) =
         let i = rnd.Next( 1 <<< 30) |> uint32
         let j = rnd.Next( 1 <<< 1) |> uint32
-        (i <<< 2 ) ||| (j <<< 1) ||| 1u 
+        (i <<< 2 ) ||| (j <<< 1) ||| 1u
+    let rndUint64 (rnd: Random) =
+        let i = rnd.NextInt64( 1 <<< 62) |> uint64
+        let j = rnd.NextInt64( 1 <<< 1) |> uint64
+        (i <<< 2 ) ||| (j <<< 1) ||| 1UL 
     let private checkLength : uint32 [] -> bool=
         Array.length >> (=) 8 
     let private checkOdd =
@@ -57,3 +61,32 @@ module Block =
         |> Array.map2 (&&&) block
         |> Array.contains 0u
         |> not
+type SplitBlockBloomFilter = private SplitBlock of Salt * Block [] 
+module Filter =
+    let insert filter (x: uint64) =
+        match filter with
+        | SplitBlock (salt, blocks) ->
+            let index = ((Array.length blocks|> uint64) * (x >>> 32)) >>> 32 |> int
+            blocks[index] <- Block.insert salt blocks[index] (uint32 x) 
+            SplitBlock (salt, blocks)
+    let check filter (x: uint64)=         
+        match filter with
+        | SplitBlock (salt, blocks) ->
+            let index = ((Array.length blocks|> uint64) * (x >>> 32)) >>> 32 |> int
+            blocks[index]
+            |> Block.check salt
+            <| (uint32 x)
+    let blocks = function | SplitBlock (_,blocks) -> Array.length blocks
+    let salt = function | SplitBlock (salt, _) -> salt
+    let empty n salt =
+        SplitBlock (salt, Array.replicate n Block.empty)
+    let create rnd n  =
+        SplitBlock (Salt.random rnd, Array.replicate n Block.empty)
+    
+    let print =
+        function
+        | SplitBlock (_, blocks) ->
+            Array.map Block.printBlock blocks
+            |> String.concat ($"{Environment.NewLine}-------------------{Environment.NewLine}")
+        
+    
